@@ -41,6 +41,26 @@ function readFront(text) {
   return fm;
 }
 
+// Scenario classification — heuristic keyword tagging (first pass; the router + user refine at runtime).
+// A skill may match several scenarios; 'general' = matched none (utility/router skills, always allowed).
+const SCENARIOS = [
+  { key: 'coding',  label: '编程 / 开发', kw: ['code','coding','implement','debug','test','tdd','review','refactor','deploy','git','program','api','bug','build','dev','compile','script','fullstack','backend','frontend','unit','merge','commit','scaffold','migrat','代码','实现','调试','测试','审查','重构','部署','开发','编译','脚本','分支','合并','接口','编程','工程'] },
+  { key: 'design',  label: '设计 / 绘图', kw: ['design','ui','ux','diagram','c4','graphviz','plantuml','structurizr','prototype','draw','svg','excalidraw','drawio','figma','mockup','visual','wireframe','architecture','chart','topology','绘图','设计','架构','原型','视觉','界面','图表','拓扑'] },
+  { key: 'writing', label: '文档 / 写作', kw: ['doc','document','writing','readme','paper','thesis','report','markdown','ppt','pptx','slide','presentation','deck','essay','documentation','outline','文档','写作','论文','报告','说明','演示','幻灯片','大纲','文案','撰写'] },
+  { key: 'chat',    label: '日常 / 问答', kw: ['ask','chat','answer','explain','translate','summarize','summary','brainstorm','idea','question','router','闲聊','问答','翻译','总结','头脑','想法','解释','路由'] },
+];
+const SCEN_LABEL = { general: '通用 / 工具', ...Object.fromEntries(SCENARIOS.map(s => [s.key, s.label])) };
+function classify(name, desc) {
+  const hay = ((name || '') + ' ' + (desc || '')).toLowerCase();
+  const scored = SCENARIOS
+    .map(s => ({ key: s.key, n: s.kw.reduce((a, k) => a + (hay.includes(k.toLowerCase()) ? 1 : 0), 0) }))
+    .filter(s => s.n > 0)
+    .sort((a, b) => b.n - a.n);
+  return scored.length
+    ? { scen: scored.map(s => s.key), primary: scored[0].key }
+    : { scen: ['general'], primary: 'general' };
+}
+
 // Recursively find directories that contain a SKILL.md (a skill folder).
 function walk(dir, depth, acc) {
   if (depth > 6) return acc;
@@ -63,11 +83,16 @@ function collect(dir, group) {
     let text = '';
     try { text = readFileSync(join(p, 'SKILL.md'), 'utf8'); } catch { continue; }
     const fm = readFront(text);
+    const nm = fm.name || basename(p);
+    const desc = (fm.description || '(no description)').replace(/\s+/g, ' ').trim().slice(0, 300);
+    const sc = classify(nm, desc);
     out.push({
-      name: fm.name || basename(p),
-      desc: (fm.description || '(no description)').replace(/\s+/g, ' ').trim().slice(0, 300),
+      name: nm,
+      desc,
       hidden: fm['disable-model-invocation'] === 'true',
       group,
+      scen: sc.scen,
+      primary: sc.primary,
     });
   }
   return out;
@@ -148,13 +173,26 @@ md += `Total: ${all.length} skill folders, ${new Set(all.map(e => e.name)).size}
 if (all.length === 0) {
   md += `_No skills found in the scanned locations. Check that skill folders contain a \`SKILL.md\`._\n\n`;
 }
+
+// By-scenario summary (heuristic tags; refine via USER-NOTES or at runtime).
+md += `## 按场景归类 (By scenario)\n\n`;
+md += `> 分类为关键词启发式初判，一个技能可属多个场景；\`general\` 为通用/工具类，任何场景都可用。最终以路由器判断 + 用户确认为准。\n\n`;
+for (const key of [...SCENARIOS.map(s => s.key), 'general']) {
+  const uniq = new Map();
+  for (const e of all) if (e.scen.includes(key) && !uniq.has(e.name)) uniq.set(e.name, e);
+  const items = [...uniq.values()].sort((a, b) => a.name.localeCompare(b.name));
+  md += `### ${SCEN_LABEL[key]} (\`${key}\`) — ${items.length}\n\n`;
+  md += items.length ? items.map(e => `/${e.name}`).join(' · ') + `\n\n` : `_（无）_\n\n`;
+}
+
 for (const [g, list] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
   md += `## ${g}\n\n`;
   for (const e of list.sort((a, b) => a.name.localeCompare(b.name))) {
     const also = names.get(e.name).filter(x => x !== e.group);
     const dupNote = also.length ? ` _(also in: ${also.join(', ')})_` : '';
     const hiddenNote = e.hidden ? ` **[manual-only: model cannot auto-invoke; user triggers /${e.name}]**` : '';
-    md += `- **/${e.name}** — ${e.desc}${hiddenNote}${dupNote}\n`;
+    const scenNote = ` _[${e.scen.join(', ')}]_`;
+    md += `- **/${e.name}** — ${e.desc}${hiddenNote}${dupNote}${scenNote}\n`;
   }
   md += `\n`;
 }
