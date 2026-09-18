@@ -1,0 +1,13 @@
+# Locally generated routing map (contains your personal skill inventory) — do not commit.
+# Ship only references/routing-map.example.md.
+references/routing-map.md
+
+# Node
+node_modules/
+*.log
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
